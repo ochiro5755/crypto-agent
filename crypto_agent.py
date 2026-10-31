@@ -3,15 +3,28 @@ import requests
 import threading
 import time
 from flask import Flask
-from langchain.agents import initialize_agent, Tool, AgentType
+
+# Шинэчлэгдсэн импортууд (Шинэ LangChain стандартаар)
 from langchain_openai import ChatOpenAI
+from langchain.agents import AgentExecutor, create_react_agent
+from langchain.tools import Tool
+from langchain_core.prompts import PromptTemplate
 
+# ==========================================
 # 1. ТАНЫ НУУЦ ТҮЛХҮҮРҮҮД
-os.environ["OPENAI_API_KEY"] = "ТА_OPENAI_API_KEY_ЭНД_ХУУЛНА"
-TELEGRAM_BOT_TOKEN = "BOTFATHER_ААС_АВСАН_ТОКЕНЫГ_ЭНД_ХУУЛНА"
-TELEGRAM_CHAT_ID = "IDBOT_ООС_АВСАН_ӨӨРИЙН_ID_ЭНД_ХУУЛНА"
+# ==========================================
+# os.environ["OPENAI_API_KEY"] = ... (Энэ мөрийг бүр устгана, учир нь Render автоматаар оруулна)
 
-# 2. FLASK ВЕБ СЕРВЕР (Render-т амьд гэдгээ мэдэгдэх зорилготой)
+# Системээс нууц түлхүүрүүдийг дуудаж авах
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+
+if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    print("АЛДАА: Telegram токен олдсонгүй!")
+
+# ==========================================
+# 2. FLASK ВЕБ СЕРВЕР (Render-т амьд гэдгээ мэдэгдэх)
+# ==========================================
 app = Flask(__name__)
 
 @app.route('/')
@@ -19,11 +32,12 @@ def home():
     return "Крипто Агент 24/7 хэвийн ажиллаж байна!"
 
 def keep_alive():
-    # Render нь 10000 гэх мэт порт шаарддаг
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
+# ==========================================
 # 3. АГЕНТЫН ҮНДСЭН КОД
+# ==========================================
 def send_telegram_message(message: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
@@ -44,29 +58,68 @@ def get_coingecko_price(coin_id: str) -> str:
     except Exception as e:
         return f"Алдаа: {str(e)}"
 
-tools = [Tool(name="Crypto_Price_Checker", func=get_coingecko_price, description="Крипто үнэ шалгана.")]
+# Багажаа бүртгэх
+tools = [
+    Tool(
+        name="Crypto_Price_Checker",
+        func=get_coingecko_price,
+        description="Крипто валютын үнэ болон өөрчлөлтийг шалгана. Оролт нь койны англи нэр (жишээ нь: sui) байна."
+    )
+]
 
 def run_agent():
-    llm = ChatOpenAI(temperature=0.2, model_name="gpt-4")
-    agent = initialize_agent(tools, llm, agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION, verbose=True)
+    # 1. Тархи (LLM) бэлтгэх
+    llm = ChatOpenAI(temperature=0.2, model="gpt-4")
     
+    # 2. Шинэ загварын Prompt бэлтгэх
+    template = '''Answer the following questions as best you can. You have access to the following tools:
+
+{tools}
+
+Use the following format:
+
+Question: the input question you must answer
+Thought: you should always think about what to do
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
+
+Begin!
+
+Question: {input}
+Thought:{agent_scratchpad}'''
+    
+    prompt = PromptTemplate.from_template(template)
+
+    # 3. Агентыг угсрах (Шинэ стандартаар)
+    agent = create_react_agent(llm, tools, prompt)
+    agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+    
+    # 4. Байнгын давтамжтай ажиллуулах
     while True:
         try:
             print("🤖 Сигнал хайж байна...")
             user_query = "SUI болон Bitcoin-ийн үнийг шалгаад, яг одоо авах эсвэл зарах эсэхээ богинохон зөвлө."
-            signal_result = agent.run(user_query)
+            
+            # Агентаар бодуулах
+            result = agent_executor.invoke({"input": user_query})
+            signal_result = result['output']
+            
+            # Telegram руу илгээх
             send_telegram_message(f"🚨 **СИГНАЛ** 🚨\n\n{signal_result}")
         except Exception as e:
             print(f"Алдаа: {e}")
         
-        # 12 цаг тутамд нэг удаа ажиллана (секундээр тооцов: 12 * 60 * 60)
+        # 12 цаг тутамд нэг удаа ажиллана (43200 секунд)
         time.sleep(43200) 
 
-# 4. ВЕБ СЕРВЕР БОЛОН АГЕНТЫГ ЗЭРЭГ АЖИЛЛУУЛАХ
+# ==========================================
+# 4. ПРОГРАММЫГ ЭХЛҮҮЛЭХ
+# ==========================================
 if __name__ == "__main__":
-    # Flask веб серверийг тусдаа Thread дээр ажиллуулах
     server = threading.Thread(target=keep_alive)
     server.start()
-    
-    # Үндсэн Агентыг ажиллуулах
     run_agent()
