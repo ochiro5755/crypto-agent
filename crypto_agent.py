@@ -4,7 +4,7 @@ import threading
 import time
 from flask import Flask
 from langchain.agents import initialize_agent, Tool, AgentType
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 
 # 1. ТАНЫ НУУЦ ТҮЛХҮҮРҮҮД
 os.environ["OPENAI_API_KEY"] = "ТА_OPENAI_API_KEY_ЭНД_ХУУЛНА"
